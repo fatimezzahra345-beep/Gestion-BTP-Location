@@ -74,7 +74,7 @@ def render():
     _sec("Enregistrer un paiement")
     non_p = [p for p in paiements if p["statut"] != "paye"]
     if not non_p:
-        _ok("🎉 Toutes les factures sont soldées !")
+        st.success("🎉 Toutes les factures sont soldées !")
     else:
         fo = {f"{p['numero']} — {p['client']} ({p['solde_restant']:,.2f} MAD)": p["id"] for p in non_p}
         c1, c2, c3 = st.columns([3, 1, 1])
