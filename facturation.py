@@ -11,24 +11,6 @@ def render():
     render_page_header("💰", "Facturation",
         "Factures générées depuis les attachements validés")
 
-
-    # ── Réinitialisation rapide ───────────────────────────────────────────────
-    with st.expander("🗑️ Vider les données de cette page"):
-        st.warning("⚠️ Supprime toutes les données de ce tableau. Les tables restent intactes.")
-        if st.button("Confirmer la suppression", type="secondary",
-                     key="del_factures_btn"):
-            try:
-                from database import engine as _e_factures
-                from sqlalchemy import text as _t_factures
-                with _e_factures.connect() as _c_factures:
-                    _c_factures.execute(_t_factures("DELETE FROM factures"))
-                    _c_factures.commit()
-                st.success("✅ Données supprimées. Les tables restent vides.")
-                st.rerun()
-            except Exception as _ex_factures:
-                st.error(str(_ex_factures))
-    _div()
-
     tab_liste, tab_att, tab_red = st.tabs([
         "Liste des Factures", "Créer depuis Attachement", "Réduction / TVA"
     ])
@@ -42,6 +24,7 @@ def render():
 
         if not factures:
             _info("Aucune facture. Créez-en une depuis un attachement.")
+            return
 
         df_f = pd.DataFrame([{
             "N° Facture": f["numero"],
@@ -292,6 +275,7 @@ def render():
 
         if not fac_r:
             _info("Aucune facture à modifier.")
+            return
 
         fr_map = {f"{f['numero']} — {f['client']} — {f['montant_ttc']:,.2f} MAD": f["id"] for f in fac_r}
         sel_fr = st.selectbox("Sélectionner la facture", list(fr_map.keys()), key="red_sel")

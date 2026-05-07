@@ -12,31 +12,13 @@ def render():
     render_page_header("📝", "Devis",
         "Créez un devis → Validez → Transformez en Commande")
 
-
-    # ── Réinitialisation rapide ───────────────────────────────────────────────
-    with st.expander("🗑️ Vider les données de cette page"):
-        st.warning("⚠️ Supprime toutes les données de ce tableau. Les tables restent intactes.")
-        if st.button("Confirmer la suppression", type="secondary",
-                     key="del_devis_btn"):
-            try:
-                from database import engine as _e_devis
-                from sqlalchemy import text as _t_devis
-                with _e_devis.connect() as _c_devis:
-                    _c_devis.execute(_t_devis("DELETE FROM devis"))
-                    _c_devis.commit()
-                st.success("✅ Données supprimées. Les tables restent vides.")
-                st.rerun()
-            except Exception as _ex_devis:
-                st.error(str(_ex_devis))
-    _div()
-
     tab_liste, tab_nouveau = st.tabs(["Liste des Devis", "Nouveau Devis"])
 
     # ── LISTE & ACTIONS ────────────────────────────────────────────────────────
     with tab_liste:
         devis_list = ctrl.get_all_devis()
         if not devis_list:
-            _info("Aucun devis. Créez votre premier devis.")
+            _info("Aucun devis. Créez votre premier devis."); return
 
         # Filtres
         statuts = ["Tous","brouillon","valide","facture","annule"]

@@ -102,11 +102,18 @@ def delete_engin(engin_id):
 def get_engins_stats():
     session = SessionLocal()
     try:
-        total = session.query(Engin).count()
-        disponibles = session.query(Engin).filter(Engin.statut == "disponible").count()
-        loues = session.query(Engin).filter(Engin.statut == "loue").count()
-        maintenance = session.query(Engin).filter(Engin.statut == "maintenance").count()
-        return {"total": total, "disponibles": disponibles, "loues": loues, "maintenance": maintenance}
+        from sqlalchemy import func
+        engins = session.query(Engin).all()
+        total       = sum(e.quantite_totale or 1 for e in engins)
+        loues       = sum(e.quantite_louee or 0 for e in engins)
+        maintenance = sum(e.quantite_maintenance or 0 for e in engins)
+        disponibles = max(0, total - loues - maintenance)
+        return {
+            "total":        total,
+            "disponibles":  disponibles,
+            "loues":        loues,
+            "maintenance":  maintenance,
+        }
     finally:
         session.close()
 
@@ -181,10 +188,14 @@ def delete_client(client_id):
 
 def calculer_montants(lignes: list, tva_taux: float = 20.0):
     """
-    lignes = [{"engin_id": x, "quantite": y, "prix_unitaire": z}, ...]
+    lignes = [{"engin_id": x, "quantite": y, "prix_unitaire": z, "montant": total}, ...]
+    Uses "montant" field if present (includes duree), otherwise qty * prix
     Retourne (montant_ht, montant_tva, montant_ttc)
     """
-    montant_ht = sum(l["quantite"] * l["prix_unitaire"] for l in lignes)
+    montant_ht = sum(
+        l.get("montant", l["quantite"] * l["prix_unitaire"])
+        for l in lignes
+    )
     montant_tva = round(montant_ht * tva_taux / 100, 2)
     montant_ttc = round(montant_ht + montant_tva, 2)
     return montant_ht, montant_tva, montant_ttc
@@ -270,6 +281,7 @@ def get_devis_by_id(devis_id: int):
             "id": d.id, "numero": d.numero,
             "client_id": d.client_id,
             "client_nom": d.client.nom_complet if d.client else "N/A",
+            "client_email": d.client.email if d.client else "",
             "client_ice": d.client.ice if d.client else "",
             "client_tel": d.client.telephone if d.client else "",
             "client_adresse": d.client.adresse if d.client else "",
@@ -380,12 +392,19 @@ def get_all_factures():
     session = SessionLocal()
     try:
         factures = session.query(Facture).order_by(Facture.created_at.desc()).all()
+        today = date.today()
+        updated = False
         result = []
         for f in factures:
             client_nom = f.devis.client.nom_complet if f.devis and f.devis.client else "N/A"
-            # Check retard
-            if f.statut == "en_attente" and f.echeance and f.echeance < date.today():
+            # Mettre à jour statut retard ET sauvegarder en base
+            if f.statut == "en_attente" and f.echeance and f.echeance < today:
                 f.statut = "retard"
+                updated = True
+        if updated:
+            session.commit()
+        for f in factures:
+            client_nom = f.devis.client.nom_complet if f.devis and f.devis.client else "N/A"
             result.append({
                 "id": f.id, "numero": f.numero, "client": client_nom,
                 "devis_numero": f.devis.numero if f.devis else "N/A",
@@ -423,11 +442,22 @@ def get_dashboard_stats():
     try:
         from sqlalchemy import func
 
-        # CA total (factures payées ou partielles)
+        today = date.today()
+
+        # Mettre à jour les statuts retard avant calcul
+        retard_updated = False
+        factures_all = session.query(Facture).all()
+        for f in factures_all:
+            if f.statut == "en_attente" and f.echeance and f.echeance < today:
+                f.statut = "retard"
+                retard_updated = True
+        if retard_updated:
+            session.commit()
+
+        # CA total (factures payées ou partielles) — inchangé
         ca_total = session.query(func.sum(Facture.montant_paye)).scalar() or 0.0
 
         # CA du mois courant
-        today = date.today()
         ca_mois = session.query(func.sum(Facture.montant_paye)).filter(
             func.strftime('%Y-%m', Facture.date_emission) == today.strftime('%Y-%m')
         ).scalar() or 0.0
@@ -435,40 +465,39 @@ def get_dashboard_stats():
         # Devis en cours
         devis_en_cours = session.query(Devis).filter(Devis.statut == "valide").count()
 
-        # Factures en retard
+        # Factures en retard — après mise à jour statut
         factures_retard = session.query(Facture).filter(
-            Facture.statut.in_(["en_attente", "partiel"]),
-            Facture.echeance < today
+            Facture.statut == "retard"
         ).count()
 
-        # Engins stats
+        # Engins stats — somme des quantités réelles
         engins_stats = get_engins_stats()
 
         # CA par mois (6 derniers mois)
         ca_mensuel = []
         for i in range(5, -1, -1):
             mois_date = date(today.year, today.month, 1) - timedelta(days=30 * i)
-            mois_str = mois_date.strftime('%Y-%m')
+            mois_str  = mois_date.strftime('%Y-%m')
             ca = session.query(func.sum(Facture.montant_paye)).filter(
                 func.strftime('%Y-%m', Facture.date_emission) == mois_str
             ).scalar() or 0.0
             ca_mensuel.append({"mois": mois_date.strftime('%b %Y'), "ca": ca})
 
-        # Factures en attente (créances) — utiliser les colonnes SQL, pas la property Python
+        # Créances
         creances = session.query(
             func.sum(Facture.montant_ttc - Facture.montant_paye)
         ).filter(
-            Facture.statut.in_(["en_attente", "partiel"])
+            Facture.statut.in_(["en_attente", "partiel", "retard"])
         ).scalar() or 0.0
 
         return {
-            "ca_total": ca_total,
-            "ca_mois": ca_mois,
-            "devis_en_cours": devis_en_cours,
+            "ca_total":        ca_total,
+            "ca_mois":         ca_mois,
+            "devis_en_cours":  devis_en_cours,
             "factures_retard": factures_retard,
-            "engins": engins_stats,
-            "ca_mensuel": ca_mensuel,
-            "creances": creances
+            "engins":          engins_stats,
+            "ca_mensuel":      ca_mensuel,
+            "creances":        creances,
         }
     finally:
         session.close()
@@ -616,9 +645,58 @@ def get_facture_details_complets(facture_id: int):
         f = session.query(Facture).filter(Facture.id == facture_id).first()
         if not f:
             return None
+        # Load client email INSIDE session (before close)
+        client_email_fac = ""
+        client_nom_fac   = ""
+        try:
+            if f.devis_id:
+                from models import Devis as DevisM
+                dv = session.query(DevisM).filter(DevisM.id==f.devis_id).first()
+                if dv and dv.client:
+                    client_email_fac = dv.client.email or ""
+                    client_nom_fac   = dv.client.nom_complet or ""
+        except Exception:
+            pass
         devis_data = get_devis_by_id(f.devis_id) if f.devis_id else None
+        # Get attachement + lignes par engin
+        att_num_fac = ""
+        lignes_att_fac = []
+        try:
+            from models import Attachement as AttModel, Engin as EnginM3
+            from sqlalchemy import text as _text
+            _att_id = getattr(f, 'attachement_id', None)
+            if _att_id:
+                att_f = session.query(AttModel).filter(AttModel.id==_att_id).first()
+                if att_f:
+                    att_num_fac = att_f.numero or ""
+                    # Lignes par engin
+                    rows_f = session.execute(
+                        _text("SELECT engin_id, SUM(heures) "
+                              "FROM jours_attachement WHERE attachement_id=:aid "
+                              "GROUP BY engin_id"),
+                        {"aid": _att_id}
+                    ).fetchall()
+                    from collections import defaultdict
+                    for eid_f, nb_j_f in rows_f:
+                        if not nb_j_f or nb_j_f <= 0: continue
+                        eng_f = session.query(EnginM3).filter(EnginM3.id==eid_f).first() if eid_f else None
+                        nom_f = eng_f.nom.upper() if eng_f else (att_f.matricule_engin or "ENGIN")
+                        prix_f= eng_f.prix_journalier if eng_f else 0
+                        lignes_att_fac.append({
+                            "designation": f"LOCATION {nom_f}",
+                            "qte":    float(nb_j_f),
+                            "prix":   prix_f,
+                            "montant":round(prix_f * float(nb_j_f), 2),
+                        })
+        except Exception:
+            pass
+
         return {
             "id": f.id, "numero": f.numero,
+            "client_nom":   client_nom_fac,
+            "client_email": client_email_fac,
+            "attachement_numero": att_num_fac,
+            "lignes_attachement": lignes_att_fac,
             "devis": devis_data,
             "date_emission": f.date_emission,
             "echeance": f.echeance,
@@ -734,10 +812,13 @@ def get_all_commandes():
         cmds = session.query(Commande).order_by(Commande.created_at.desc()).all()
         result = []
         for c in cmds:
-            engins_list = [f"{l.engin.nom} (x{l.quantite})" for l in c.lignes if l.engin]
+            engins_list = [{"nom": l.engin.nom, "quantite": l.quantite}
+                           for l in c.lignes if l.engin]
+            devis_num = c.devis.numero if c.devis else "—"
             result.append({
                 "id": c.id, "numero": c.numero,
                 "client": c.client.nom_complet if c.client else "N/A",
+                "client_email": c.client.email if c.client else "",
                 "client_id": c.client_id,
                 "date_commande": c.date_commande,
                 "date_debut": c.date_debut, "date_fin": c.date_fin,
@@ -745,6 +826,7 @@ def get_all_commandes():
                 "statut": c.statut, "notes": c.notes,
                 "engins": engins_list,
                 "devis_id": c.devis.id if c.devis else None,
+                "devis_numero": devis_num,
             })
         return result
     finally:
@@ -842,10 +924,25 @@ def get_all_bons_livraison():
     session = SessionLocal()
     try:
         bls = session.query(BonLivraison).order_by(BonLivraison.created_at.desc()).all()
+        updated = False
+        for b in bls:
+            cmd = b.devis.commande if b.devis and b.devis.commande else None
+            if cmd and cmd.statut == "livree":
+                if b.statut != "livre":
+                    b.statut = "livre"
+                    updated = True
+            else:
+                if b.statut not in ("livre", "en_attente"):
+                    b.statut = "en_attente"
+                    updated = True
+        if updated:
+            session.commit()
         return [{
             "id": b.id, "numero": b.numero,
             "devis_numero": b.devis.numero if b.devis else "N/A",
+            "commande_numero": b.devis.commande.numero if b.devis and b.devis.commande else "—",
             "client": b.devis.client.nom_complet if b.devis and b.devis.client else "N/A",
+            "client_email": b.devis.client.email if b.devis and b.devis.client else "",
             "date_livraison": b.date_livraison,
             "lieu_livraison": b.lieu_livraison,
             "statut": b.statut, "observations": b.observations,
@@ -899,12 +996,16 @@ def get_all_attachements():
         return [{
             "id": a.id, "numero": a.numero,
             "devis_numero": a.devis.numero if a.devis else "N/A",
+            "commande_numero": a.devis.commande.numero if a.devis and a.devis.commande else "—",
             "client": a.devis.client.nom_complet if a.devis and a.devis.client else "N/A",
-            "engin": a.engin_obj.nom if a.engin_obj else a.matricule_engin or "N/A",
+            "engin_nom": a.engin_obj.nom if a.engin_obj else (a.matricule_engin or "N/A"),
+            "engin": a.engin_obj.nom if a.engin_obj else (a.matricule_engin or "N/A"),
             "matricule": a.matricule_engin,
             "mois": a.mois, "annee": a.annee,
             "projet": a.projet,
             "nb_jours": a.nb_jours_travailles,
+            "nb_jours_travailles": a.nb_jours_travailles,
+            "nb_heures_travaillees": a.nb_heures_travaillees,
             "nb_heures": a.nb_heures_travaillees,
         } for a in atts]
     finally:
@@ -939,24 +1040,150 @@ def create_attachement(devis_id, engin_id, mois, annee, projet,
     finally:
         session.close()
 
+
+def create_attachement_multi(devis_id, engins_jours: list, mois, annee, projet, observations=""):
+    """
+    Crée UN SEUL attachement pour plusieurs engins d'un même client.
+    engins_jours = [
+        {
+            "engin_id": int,
+            "matricule": str,
+            "nom": str,
+            "jours_detail": [(jour, heures, jours_travail), ...]
+        },
+        ...
+    ]
+    """
+    from database import SessionLocal
+    from models import Attachement, JourAttachement
+    session = SessionLocal()
+    try:
+        numero = _next_num("ATT", Attachement)
+        # Totaux globaux — somme des valeurs réelles (0.5 = demi-jour, 1 = journée)
+        nb_j_total = 0.0
+        nb_h_total = 0.0
+        for eng in engins_jours:
+            nb_j_total += sum(float(jt) for _,_,jt in eng["jours_detail"] if jt > 0)
+            nb_h_total += sum(float(jt) for _,_,jt in eng["jours_detail"] if jt > 0)
+
+        att = Attachement(
+            numero=numero, devis_id=devis_id,
+            engin_id=engins_jours[0]["engin_id"] if engins_jours else None,
+            mois=mois, annee=annee, projet=projet,
+            matricule_engin=", ".join(e["matricule"] for e in engins_jours),
+            nb_jours_travailles=nb_j_total,
+            nb_heures_travaillees=nb_h_total,
+            observations=observations
+        )
+        session.add(att); session.flush()
+
+        # Enregistrer les jours par engin
+        for eng in engins_jours:
+            for jour, heures, jt in eng["jours_detail"]:
+                session.add(JourAttachement(
+                    attachement_id=att.id,
+                    engin_id=eng["engin_id"],
+                    matricule_engin=eng["matricule"],
+                    jour=jour, heures=heures, jours_travail=jt
+                ))
+
+        session.commit()
+        return att.id, numero
+    except Exception as e:
+        session.rollback(); raise e
+    finally:
+        session.close()
+
+
 def get_attachement_by_id(att_id):
     from database import SessionLocal
-    from models import Attachement
+    from models import Attachement, JourAttachement, Engin as EnginM
     session = SessionLocal()
     try:
         a = session.query(Attachement).filter(Attachement.id == att_id).first()
         if not a: return None
+
+        # Charger tous les jours avec SQL direct (évite lazy loading)
+        from sqlalchemy import text
+        rows = session.execute(
+            text("SELECT jour, heures, jours_travail, engin_id, matricule_engin "
+                 "FROM jours_attachement WHERE attachement_id = :aid ORDER BY engin_id, matricule_engin, jour"),
+            {"aid": att_id}
+        ).fetchall()
+
+        # Grouper par engin — clé = engin_id si disponible, sinon matricule
+        from collections import OrderedDict
+        engins_dict = OrderedDict()
+        engin_cache = {}  # cache engin_id → obj
+
+        for row in rows:
+            jour, heures, jt, eid, mat = row
+            val = float(jt if jt is not None else heures or 0)
+
+            # Clé unique : priorité engin_id, sinon matricule
+            if eid and eid not in engin_cache:
+                eng_obj = session.query(EnginM).filter(EnginM.id == eid).first()
+                engin_cache[eid] = eng_obj
+            eng_obj = engin_cache.get(eid) if eid else None
+            if not eng_obj and mat:
+                eng_obj = session.query(EnginM).filter(EnginM.matricule == mat).first()
+                if eng_obj:
+                    engin_cache[eng_obj.id] = eng_obj
+
+            # Clé = engin_id si dispo, sinon matricule (garantit séparation)
+            key = eid if eid else mat
+
+            if key not in engins_dict:
+                nom = ""
+                prix = 0
+                if eng_obj:
+                    nom = eng_obj.nom + (" / " + eng_obj.matricule if eng_obj.matricule else "")
+                    prix = eng_obj.prix_journalier or 0
+                elif mat:
+                    nom = mat
+                engins_dict[key] = {
+                    "nom":       nom or (a.engin_obj.nom if a.engin_obj else a.matricule_engin or ""),
+                    "matricule": (eng_obj.matricule if eng_obj else None) or mat or a.matricule_engin or "",
+                    "prix":      prix,
+                    "jours":     [],
+                    "total":     0.0,
+                }
+            if val > 0:
+                engins_dict[key]["jours"].append((jour, val, val))
+                engins_dict[key]["total"] += val
+
+        # Si pas de lignes (ancien attachement), fallback single engin
+        if not engins_dict:
+            engins_dict[0] = {
+                "nom":      a.engin_obj.nom if a.engin_obj else (a.matricule_engin or ""),
+                "matricule": a.matricule_engin or "",
+                "prix":     a.engin_obj.prix_journalier if a.engin_obj else 0,
+                "jours":    [],
+                "total":    float(a.nb_jours_travailles or 0),
+            }
+
+        engins_lignes = list(engins_dict.values())
+
+        # Calcul prix/jr pour facturation (premier engin)
+        prix_j = engins_lignes[0]["prix"] if engins_lignes else 0
+
         return {
-            "id": a.id, "numero": a.numero,
-            "devis": get_devis_by_id(a.devis_id),
-            "engin_nom": a.engin_obj.nom if a.engin_obj else a.matricule_engin,
+            "id":       a.id,
+            "numero":   a.numero,
+            "devis":    get_devis_by_id(a.devis_id),
+            "engin_nom": engins_lignes[0]["nom"] if engins_lignes else (a.matricule_engin or ""),
             "matricule": a.matricule_engin,
-            "mois": a.mois, "annee": a.annee, "projet": a.projet,
+            "prix_journalier": prix_j,
+            "mois":     a.mois,
+            "annee":    a.annee,
+            "projet":   a.projet,
+            "nb_jours_travailles":  a.nb_jours_travailles,
+            "nb_heures_travaillees": a.nb_heures_travaillees,
             "nb_jours": a.nb_jours_travailles,
             "nb_heures": a.nb_heures_travaillees,
             "observations": a.observations,
-            "jours": [(j.jour, j.heures, j.jours_travail) for j in
-                      sorted(a.jours, key=lambda x: x.jour)],
+            "engins_lignes": engins_lignes,   # ← multi-engins pour PDF
+            "jours": engins_lignes[0]["jours"] if engins_lignes else [],
         }
     finally:
         session.close()
@@ -1040,10 +1267,12 @@ def get_all_attestations():
         session.close()
 
 
-def create_attestation_retard(facture_id, taux_interet_mensuel, notes=""):
+def create_attestation_retard(facture_id, taux_interet, notes="",
+                               nb_periodes=None, periode_label="Mensuel"):
     """
-    Crée une attestation de retard avec calcul automatique des intérêts.
-    taux_interet_mensuel : % par mois (ex: 1.5)
+    Crée une attestation de retard.
+    - Sans période (taux fixe) → intérêts calculés immédiatement
+    - Avec période (jour/semaine/mois) → intérêts = 0, taux mentionné seulement
     """
     from database import SessionLocal
     from models import AttestationRetard, Facture
@@ -1054,14 +1283,22 @@ def create_attestation_retard(facture_id, taux_interet_mensuel, notes=""):
         if not f:
             raise ValueError("Facture introuvable")
 
-        today = today_date.today()
+        today         = today_date.today()
         date_echeance = f.echeance or today
-        nb_jours = max(0, (today - date_echeance).days)
-        nb_mois   = nb_jours / 30.0
+        nb_jours      = max(0, (today - date_echeance).days)
+        capital       = round(f.solde_restant, 2)
 
-        capital   = round(f.solde_restant, 2)
-        interets  = round(capital * taux_interet_mensuel / 100 * nb_mois, 2)
-        total     = round(capital + interets, 2)
+        # Calculer intérêts SEULEMENT si taux fixe (sans période)
+        taux_fixe = "taux fixe" in (periode_label or "").lower() or nb_periodes == 1
+        if taux_fixe and taux_interet > 0:
+            interets = round(capital * taux_interet / 100, 2)
+        else:
+            interets = 0.0  # Pas calculé — dépend de la durée finale
+
+        total    = round(capital + interets, 2)
+
+        # Inclure la période dans les notes
+        notes_complet = f"[Taux : {periode_label}]\n{notes}" if notes else f"[Taux : {periode_label}]"
 
         numero = _next_num("ATR", AttestationRetard)
         att = AttestationRetard(
@@ -1069,11 +1306,11 @@ def create_attestation_retard(facture_id, taux_interet_mensuel, notes=""):
             date_emission=today,
             date_echeance_initiale=date_echeance,
             nb_jours_retard=nb_jours,
-            taux_interet=taux_interet_mensuel,
+            taux_interet=taux_interet,
             montant_capital=capital,
             montant_interets=interets,
             montant_total=total,
-            notes=notes,
+            notes=notes_complet,
         )
         session.add(att)
         session.commit()
@@ -1284,12 +1521,13 @@ def create_facture_from_attachement(attachement_id: int, tva_taux: float,
                                      date_echeance, reduction_pct: float = 0.0,
                                      reduction_mad: float = 0.0, notes: str = ""):
     """
-    Génère une facture sur la base des jours RÉELS de l'attachement.
-    date_echeance : date choisie par l'utilisateur
+    Génère une facture depuis un attachement multi-engins.
+    Chaque engin = ses jours réels × son prix journalier propre.
     """
     from database import SessionLocal
-    from models import Attachement, Facture
+    from models import Attachement, Facture, Engin as EnginM
     from datetime import date as today_date
+    from sqlalchemy import text
     session = SessionLocal()
     try:
         att = session.query(Attachement).filter(Attachement.id == attachement_id).first()
@@ -1298,12 +1536,47 @@ def create_facture_from_attachement(attachement_id: int, tva_taux: float,
         if not att.devis:
             raise ValueError("Attachement sans devis associé")
 
-        engin = att.engin_obj
-        prix_jr   = engin.prix_journalier if engin else 0
-        jours_reels = att.nb_jours_travailles
-        ht        = round(prix_jr * jours_reels, 2)
-        tva_mont  = round(ht * tva_taux / 100, 2)
-        base_ttc  = round(ht + tva_mont, 2)
+        # ── Récupérer les jours par engin depuis get_attachement_by_id ──────────
+        att_data = get_attachement_by_id(attachement_id)
+        engins_lignes = att_data.get("engins_lignes", []) if att_data else []
+
+        lignes_att = []
+        ht_total   = 0.0
+
+        if engins_lignes:
+            for eng_ligne in engins_lignes:
+                nb_jours = float(eng_ligne.get("total", 0) or 0)
+                if nb_jours <= 0:
+                    continue
+                prix_jr  = float(eng_ligne.get("prix", 0) or 0)
+                nom_eng  = eng_ligne.get("nom", "Engin")
+                mat_eng  = eng_ligne.get("matricule", "")
+                montant  = round(prix_jr * nb_jours, 2)
+                ht_total += montant
+                lignes_att.append({
+                    "designation": f"LOCATION {nom_eng.upper().split(' / ')[0]}",
+                    "matricule":   mat_eng,
+                    "qte":         nb_jours,
+                    "prix":        prix_jr,
+                    "montant":     montant,
+                })
+        else:
+            # Fallback ancienne logique
+            engin = att.engin_obj
+            prix_jr = engin.prix_journalier if engin else 0
+            nb_j   = float(att.nb_jours_travailles or 0)
+            ht_total = round(prix_jr * nb_j, 2)
+            lignes_att.append({
+                "designation": f"LOCATION {engin.nom.upper() if engin else ''}",
+                "matricule":   engin.matricule if engin else "",
+                "qte":         nb_j,
+                "prix":        prix_jr,
+                "montant":     ht_total,
+            })
+
+        ht_total  = round(ht_total, 2)
+        tva_mont  = round(ht_total * tva_taux / 100, 2)
+        base_ttc  = round(ht_total + tva_mont, 2)
 
         # Réduction
         if reduction_pct > 0:
@@ -1315,9 +1588,10 @@ def create_facture_from_attachement(attachement_id: int, tva_taux: float,
         numero = _next_num("FAC", Facture)
         fac = Facture(
             numero=numero, devis_id=att.devis.id,
+            attachement_id=att.id,
             date_emission=today_date.today(),
             echeance=date_echeance,
-            montant_ht=ht, tva_taux=tva_taux,
+            montant_ht=ht_total, tva_taux=tva_taux,
             montant_tva=tva_mont, reduction=red,
             reduction_pct=reduction_pct if reduction_pct > 0 else 0.0,
             montant_ttc=ttc, notes=notes,
@@ -1325,7 +1599,9 @@ def create_facture_from_attachement(attachement_id: int, tva_taux: float,
         session.add(fac)
         att.devis.statut = "facture"
         session.commit()
-        return fac.id, numero, ht, tva_mont, ttc
+
+        return fac.id, numero, ht_total, tva_mont, ttc, lignes_att
+
     except Exception as e:
         session.rollback(); raise e
     finally:
@@ -1348,9 +1624,9 @@ def get_suivi_paiements():
             client_nom = (f.devis.client.nom_complet
                           if f.devis and f.devis.client else "N/A")
             nb_jours_retard = 0
-            if f.echeance and f.statut in ["en_attente","partiel"]:
+            if f.echeance and f.statut in ["en_attente", "partiel", "retard"]:
                 nb_jours_retard = max(0, (today - f.echeance).days)
-                if nb_jours_retard > 0 and f.statut == "en_attente":
+                if nb_jours_retard > 0 and f.statut in ["en_attente", "partiel"]:
                     f.statut = "retard"
             result.append({
                 "id": f.id, "numero": f.numero,
@@ -1385,5 +1661,133 @@ def update_quantite_engin(engin_id: int, nouvelle_quantite: int):
         return False
     except Exception as ex:
         session.rollback(); raise ex
+    finally:
+        session.close()
+
+
+# ─── ENGINS DISPONIBLES POUR COMMANDE ────────────────────────────────────────
+
+def get_engins_disponibles_commande():
+    """
+    Retourne les engins ayant au moins 1 unité disponible.
+    quantite_disponible = quantite_totale - quantite_louee - quantite_maintenance
+    """
+    session = SessionLocal()
+    try:
+        engins = session.query(Engin).order_by(Engin.nom).all()
+        result = []
+        for e in engins:
+            dispo = max(0, (e.quantite_totale or 1)
+                        - (e.quantite_louee or 0)
+                        - (e.quantite_maintenance or 0))
+            if dispo > 0:
+                result.append({
+                    "id":            e.id,
+                    "nom":           e.nom,
+                    "matricule":     e.matricule,
+                    "type_engin":    e.type_engin,
+                    "prix_journalier": e.prix_journalier,
+                    "quantite_totale": e.quantite_totale or 1,
+                    "quantite_louee":  e.quantite_louee or 0,
+                    "quantite_maintenance": e.quantite_maintenance or 0,
+                    "quantite_disponible": dispo,
+                    "statut_affichage": f"{dispo} dispo / {e.quantite_louee or 0} loué(s) / {e.quantite_maintenance or 0} maintenance",
+                })
+        return result
+    finally:
+        session.close()
+
+
+def incrementer_quantite_louee(engin_id: int, quantite: int = 1):
+    """Incrémente la quantité louée d'un engin."""
+    session = SessionLocal()
+    try:
+        e = session.query(Engin).filter(Engin.id == engin_id).first()
+        if e:
+            e.quantite_louee = (e.quantite_louee or 0) + quantite
+            # Si tout est loué, marquer statut "loue"
+            dispo = max(0, (e.quantite_totale or 1) - (e.quantite_louee or 0)
+                        - (e.quantite_maintenance or 0))
+            if dispo == 0:
+                e.statut = "loue"
+            session.commit()
+    finally:
+        session.close()
+
+
+def decrementer_quantite_louee(engin_id: int, quantite: int = 1):
+    """Décrémente la quantité louée (retour d'engin)."""
+    session = SessionLocal()
+    try:
+        e = session.query(Engin).filter(Engin.id == engin_id).first()
+        if e:
+            e.quantite_louee = max(0, (e.quantite_louee or 0) - quantite)
+            dispo = max(0, (e.quantite_totale or 1) - (e.quantite_louee or 0)
+                        - (e.quantite_maintenance or 0))
+            if dispo > 0:
+                e.statut = "disponible"
+            session.commit()
+    finally:
+        session.close()
+
+
+def devis_vers_commande(devis_id: int) -> tuple:
+    """
+    Transforme un devis validé en commande.
+    Transfère client, engins, dates automatiquement.
+    Retourne (commande_id, numero_commande)
+    """
+    from models import Commande, LigneCommande, Devis, LigneDevis
+    session = SessionLocal()
+    try:
+        d = session.query(Devis).filter(Devis.id == devis_id).first()
+        if not d:
+            raise ValueError("Devis introuvable")
+        if d.statut != "valide":
+            raise ValueError("Le devis doit être validé avant transformation")
+
+        # Générer numéro commande
+        year = d.date_creation.year if d.date_creation else __import__('datetime').date.today().year
+        from sqlalchemy import func
+        count = session.query(func.count(Commande.id)).scalar() or 0
+        num_cmd = f"CMD-{year}-{str(count+1).zfill(3)}"
+
+        # Créer la commande
+        cmd = Commande(
+            numero=num_cmd,
+            client_id=d.client_id,
+            date_commande=__import__('datetime').date.today(),
+            date_debut=d.date_debut,
+            date_fin=d.date_fin,
+            statut="confirmee",
+            notes=f"Généré depuis devis {d.numero}",
+        )
+        session.add(cmd)
+        session.flush()
+
+        # Transférer les lignes (engins)
+        for ligne in d.lignes:
+            lc = LigneCommande(
+                commande_id=cmd.id,
+                engin_id=ligne.engin_id,
+                quantite=int(ligne.quantite or 1),
+            )
+            session.add(lc)
+            # Mettre à jour statut engin (quantite_louee gérée au BL)
+            engin = session.query(Engin).filter(Engin.id == ligne.engin_id).first()
+            if engin:
+                dispo = max(0, (engin.quantite_totale or 1)
+                            - (engin.quantite_louee or 0)
+                            - (engin.quantite_maintenance or 0))
+                engin.statut = "commande" if dispo > 0 else "loue"
+
+        # Lier devis à commande
+        d.commande_id = cmd.id
+
+        session.commit()
+        return cmd.id, num_cmd
+    except Exception as e:
+        session.rollback()
+        raise e
     finally:
         session.close()

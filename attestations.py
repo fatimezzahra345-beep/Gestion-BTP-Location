@@ -13,24 +13,6 @@ def render():
     render_page_header("⚠️", "Attestations de Retard",
                         "Uniquement les factures dont l'échéance est dépassée")
 
-
-    # ── Réinitialisation rapide ───────────────────────────────────────────────
-    with st.expander("🗑️ Vider les données de cette page"):
-        st.warning("⚠️ Supprime toutes les données de ce tableau. Les tables restent intactes.")
-        if st.button("Confirmer la suppression", type="secondary",
-                     key="del_attestationsretard_btn"):
-            try:
-                from database import engine as _e_attestationsretard
-                from sqlalchemy import text as _t_attestationsretard
-                with _e_attestationsretard.connect() as _c_attestationsretard:
-                    _c_attestationsretard.execute(_t_attestationsretard("DELETE FROM attestations_retard"))
-                    _c_attestationsretard.commit()
-                st.success("✅ Données supprimées. Les tables restent vides.")
-                st.rerun()
-            except Exception as _ex_attestationsretard:
-                st.error(str(_ex_attestationsretard))
-    _div()
-
     tab_liste, tab_creer = st.tabs(["Liste des Attestations", "Créer une Attestation"])
 
     # ── LISTE ─────────────────────────────────────────────────────────────────
@@ -121,6 +103,7 @@ def render():
                     Une facture apparaît ici uniquement quand sa date d'échéance
                     est dépassée et que le solde reste impayé.</div>
             </div>""", unsafe_allow_html=True)
+            return
 
         # Afficher les factures en retard
         st.markdown(f"""
@@ -142,17 +125,12 @@ def render():
             fo[label] = f["id"]
 
         sel_r = st.selectbox("Facture en retard *", list(fo.keys()), key="att_fac_sel")
-        fi_r  = next((f for f in factures_retard if f["id"] == fo[sel_r]), None)
-        if not fi_r: fi_r = factures_retard[0] if factures_retard else {}
-
-        if not fi_r or not fi_r.get("id"):
-            st.info("Aucune facture en retard sélectionnée.")
-            return
+        fi_r  = next(f for f in factures_retard if f["id"] == fo[sel_r])
 
         col_m1, col_m2, col_m3 = st.columns(3)
-        col_m1.metric("💰 Solde restant", f"{fi_r.get('solde_restant',0):,.2f} MAD")
-        col_m2.metric("📅 Jours de retard", f"{fi_r.get('nb_jours_retard',0)} jours")
-        col_m3.metric("📆 Échéance", fi_r["echeance"].strftime("%d/%m/%Y") if fi_r.get("echeance") else "—")
+        col_m1.metric("💰 Solde restant", f"{fi_r['solde_restant']:,.2f} MAD")
+        col_m2.metric("📅 Jours de retard", f"{fi_r['nb_jours_retard']} jours")
+        col_m3.metric("📆 Échéance", fi_r["echeance"].strftime("%d/%m/%Y"))
 
         _div()
         _sec("Taux d'intérêt de retard — 100% personnalisable")
@@ -168,8 +146,8 @@ def render():
                                      "Journalier", "Hebdomadaire", "Mensuel"],
                                     index=3, key="att_periode")
         with col_t2:
-            nb_j  = fi_r.get("nb_jours_retard", 0)
-            solde = fi_r.get("solde_restant", 0)
+            nb_j  = fi_r["nb_jours_retard"]
+            solde = fi_r["solde_restant"]
             if periode == "Sans période (taux fixe)":
                 # Taux fixe = calcul immédiat (pas besoin que le temps passe)
                 nb_periodes   = 1

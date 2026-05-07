@@ -18,13 +18,19 @@ class Engin(Base):
     nom             = Column(String(100), nullable=False)
     matricule       = Column(String(50),  unique=True, nullable=False)
     type_engin      = Column(String(100))
-    quantite_totale = Column(Integer, default=1)          # total dans le parc
+    quantite_totale      = Column(Integer, default=1)   # total dans le parc
+    quantite_louee       = Column(Integer, default=0)   # en location active
+    quantite_maintenance = Column(Integer, default=0)   # en maintenance
     prix_journalier = Column(Float,   nullable=False)
     statut          = Column(String(20), default="disponible")  # disponible/loue/maintenance/commande
     photo_path      = Column(String(255), nullable=True)
     description     = Column(Text, nullable=True)
     date_acquisition= Column(Date, nullable=True)
     created_at      = Column(DateTime, default=datetime.utcnow)
+    @property
+    def quantite_disponible(self):
+        return max(0,(self.quantite_totale or 1)-(self.quantite_louee or 0)-(self.quantite_maintenance or 0))
+
     lignes_devis    = relationship("LigneDevis",   back_populates="engin")
     commandes       = relationship("LigneCommande",back_populates="engin")
 
@@ -148,10 +154,12 @@ class Attachement(Base):
                                  cascade="all, delete-orphan")
 
 class JourAttachement(Base):
-    """Détail jour par jour de l'attachement."""
+    """Détail jour par jour de l'attachement — un enregistrement par engin par jour."""
     __tablename__ = "jours_attachement"
     id              = Column(Integer, primary_key=True, autoincrement=True)
     attachement_id  = Column(Integer, ForeignKey("attachements.id"), nullable=False)
+    engin_id        = Column(Integer, ForeignKey("engins.id"), nullable=True)
+    matricule_engin = Column(String(50), nullable=True)
     jour            = Column(Integer, nullable=False)    # 1-31
     heures          = Column(Float, default=0.0)
     jours_travail   = Column(Float, default=0.0)         # 0 ou 1
@@ -162,6 +170,7 @@ class Facture(Base):
     id              = Column(Integer, primary_key=True, autoincrement=True)
     numero          = Column(String(20), unique=True, nullable=False)
     devis_id        = Column(Integer, ForeignKey("devis.id"), nullable=False)
+    attachement_id  = Column(Integer, ForeignKey("attachements.id"), nullable=True)
     date_emission   = Column(Date, default=date.today)
     echeance        = Column(Date, nullable=True)
     montant_ht      = Column(Float, default=0.0)
