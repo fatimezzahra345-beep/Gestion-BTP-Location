@@ -12,25 +12,10 @@ def render():
         "Factures générées depuis les attachements validés")
 
 
-    # ── Réinitialisation rapide ───────────────────────────────────────────────
-    with st.expander("🗑️ Vider les données de cette page"):
-        st.warning("⚠️ Supprime toutes les données de ce tableau. Les tables restent intactes.")
-        if st.button("Confirmer la suppression", type="secondary",
-                     key="del_factures_btn"):
-            try:
-                from database import engine as _e_factures
-                from sqlalchemy import text as _t_factures
-                with _e_factures.connect() as _c_factures:
-                    _c_factures.execute(_t_factures("DELETE FROM factures"))
-                    _c_factures.commit()
-                st.success("✅ Données supprimées. Les tables restent vides.")
-                st.rerun()
-            except Exception as _ex_factures:
-                st.error(str(_ex_factures))
     _div()
 
-    tab_liste, tab_att, tab_red = st.tabs([
-        "Liste des Factures", "Créer depuis Attachement", "Réduction / TVA"
+    tab_liste, tab_att = st.tabs([
+        "Liste des Factures", "Créer depuis Attachement"
     ])
 
     # ── LISTE ─────────────────────────────────────────────────────────────────
@@ -280,76 +265,3 @@ def render():
                 st.rerun()
             except Exception as ex:
                 st.error(f"Erreur : {ex}")
-
-    # ── RÉDUCTION / TVA ───────────────────────────────────────────────────────
-    with tab_red:
-        _sec("Appliquer une réduction ou modifier la TVA")
-        try:
-            factures_r = ctrl.get_all_factures()
-            fac_r = [f for f in factures_r if f.get("statut") != "paye"]
-        except Exception:
-            fac_r = []
-
-        if not fac_r:
-            _info("Aucune facture à modifier.")
-
-        fr_map = {f"{f['numero']} — {f['client']} — {f['montant_ttc']:,.2f} MAD": f["id"] for f in fac_r}
-        sel_fr = st.selectbox("Sélectionner la facture", list(fr_map.keys()), key="red_sel")
-
-        if sel_fr:
-            fac_sel = ctrl.get_facture_details_complets(fr_map[sel_fr])
-            if fac_sel:
-                col_r1, col_r2 = st.columns(2)
-                with col_r1:
-                    red_pct = st.number_input("Réduction (%)", 0.0, 100.0, 0.0, 1.0, key="red_pct")
-                with col_r2:
-                    new_tva = st.number_input("TVA (%)", 0.0, 100.0,
-                        float(fac_sel.get("tva_taux",20)), 5.0, key="red_tva")
-
-                ht_base = fac_sel.get("montant_ht", 0)
-                red_amt = ht_base * red_pct / 100
-                tva_amt = (ht_base - red_amt) * new_tva / 100
-                ttc_new = ht_base - red_amt + tva_amt
-
-                st.markdown(f"""
-                <div style="background:white;border:1px solid #E2E8F0;border-radius:10px;
-                            padding:14px;margin-top:8px">
-                    <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px">
-                        <div style="text-align:center">
-                            <div style="font-size:11px;color:#94A3B8">HT Base</div>
-                            <div style="font-size:16px;font-weight:700">{ht_base:,.2f} MAD</div>
-                        </div>
-                        <div style="text-align:center">
-                            <div style="font-size:11px;color:#94A3B8">Réduction</div>
-                            <div style="font-size:16px;font-weight:700;color:#EF4444">-{red_amt:,.2f} MAD</div>
-                        </div>
-                        <div style="text-align:center">
-                            <div style="font-size:11px;color:#94A3B8">TVA {new_tva:.0f}%</div>
-                            <div style="font-size:16px;font-weight:700">{tva_amt:,.2f} MAD</div>
-                        </div>
-                        <div style="text-align:center">
-                            <div style="font-size:11px;color:#94A3B8">Nouveau TTC</div>
-                            <div style="font-size:18px;font-weight:900;color:#2563EB">{ttc_new:,.2f} MAD</div>
-                        </div>
-                    </div>
-                </div>""", unsafe_allow_html=True)
-
-                if st.button("Appliquer la réduction / TVA", type="primary",
-                              width="stretch", key="btn_apply_red"):
-                    try:
-                        from database import SessionLocal
-                        from models import Facture as FM
-                        _s = SessionLocal()
-                        _f = _s.query(FM).filter(FM.id==fr_map[sel_fr]).first()
-                        if _f:
-                            _f.reduction     = red_amt
-                            _f.reduction_pct = red_pct
-                            _f.tva_taux      = new_tva
-                            _f.montant_tva   = tva_amt
-                            _f.montant_ttc   = ttc_new
-                            _s.commit()
-                        _s.close()
-                        st.success(f"✅ Facture mise à jour — Nouveau TTC : {ttc_new:,.2f} MAD")
-                        st.rerun()
-                    except Exception as ex:
-                        st.error(str(ex))

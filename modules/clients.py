@@ -10,21 +10,6 @@ def render():
     render_page_header("👥", "Clients", "Gestion du portefeuille clients")
 
 
-    # ── Réinitialisation rapide ───────────────────────────────────────────────
-    with st.expander("🗑️ Vider les données de cette page"):
-        st.warning("⚠️ Supprime toutes les données de ce tableau. Les tables restent intactes.")
-        if st.button("Confirmer la suppression", type="secondary",
-                     key="del_clients_btn"):
-            try:
-                from database import engine as _e_clients
-                from sqlalchemy import text as _t_clients
-                with _e_clients.connect() as _c_clients:
-                    _c_clients.execute(_t_clients("DELETE FROM clients"))
-                    _c_clients.commit()
-                st.success("✅ Données supprimées. Les tables restent vides.")
-                st.rerun()
-            except Exception as _ex_clients:
-                st.error(str(_ex_clients))
     _div()
 
 

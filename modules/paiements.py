@@ -15,21 +15,6 @@ def render():
     import controller as ctrl
     render_page_header("", "Suivi des Paiements", "Vue consolidée des encaissements & créances")
 
-    # ── Réinitialisation rapide ───────────────────────────────────────────────
-    with st.expander("🗑️ Vider les données de cette page"):
-        st.warning("⚠️ Supprime toutes les données de ce tableau. Les tables restent intactes.")
-        if st.button("Confirmer la suppression", type="secondary",
-                     key="del_factures_btn"):
-            try:
-                from database import engine as _e_factures
-                from sqlalchemy import text as _t_factures
-                with _e_factures.connect() as _c_factures:
-                    _c_factures.execute(_t_factures("DELETE FROM factures"))
-                    _c_factures.commit()
-                st.success("✅ Données supprimées. Les tables restent vides.")
-                st.rerun()
-            except Exception as _ex_factures:
-                st.error(str(_ex_factures))
     _div()
 
     paiements = ctrl.get_suivi_paiements()

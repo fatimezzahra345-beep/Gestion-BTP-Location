@@ -163,6 +163,7 @@ def render():
                     ]:
                         conn.execute(text(f"DELETE FROM {tbl}"))
                     conn.commit()
+                ctrl.reset_quantites_engins()
                 st.success("✅ Toutes les données ont été réinitialisées !")
                 st.info("Le parc d'engins, la configuration email et le mot de passe sont conservés.")
                 st.rerun()

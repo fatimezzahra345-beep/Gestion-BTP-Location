@@ -12,24 +12,6 @@ def render():
     render_page_header("📝", "Devis",
         "Créez un devis → Validez → Transformez en Commande")
 
-
-    # ── Réinitialisation rapide ───────────────────────────────────────────────
-    with st.expander("🗑️ Vider les données de cette page"):
-        st.warning("⚠️ Supprime toutes les données de ce tableau. Les tables restent intactes.")
-        if st.button("Confirmer la suppression", type="secondary",
-                     key="del_devis_btn"):
-            try:
-                from database import engine as _e_devis
-                from sqlalchemy import text as _t_devis
-                with _e_devis.connect() as _c_devis:
-                    _c_devis.execute(_t_devis("DELETE FROM devis"))
-                    _c_devis.commit()
-                st.success("✅ Données supprimées. Les tables restent vides.")
-                st.rerun()
-            except Exception as _ex_devis:
-                st.error(str(_ex_devis))
-    _div()
-
     tab_liste, tab_nouveau = st.tabs(["Liste des Devis", "Nouveau Devis"])
 
     # ── LISTE & ACTIONS ────────────────────────────────────────────────────────
@@ -75,7 +57,7 @@ def render():
                 st.error("Devis introuvable."); return
 
             statut = ddata["statut"]
-            col_a, col_b, col_c, col_d = st.columns(4)
+            col_a, col_c, col_d = st.columns(3)
 
             # ── Valider
             with col_a:
@@ -86,24 +68,6 @@ def render():
                         st.success("Devis validé !"); st.rerun()
                 else:
                     st.button("Valider", disabled=True, width="stretch")
-
-            # ── TRANSFORMER EN COMMANDE — bouton clé du processus
-            with col_b:
-                if statut == "valide":
-                    if st.button("➡️ Transformer en Commande",
-                                  type="primary", width="stretch", key="dv_cmd"):
-                        try:
-                            cmd_id, cmd_num = ctrl.devis_vers_commande(dv_id)
-                            st.success(f"✅ Commande **{cmd_num}** créée automatiquement !\n"
-                                       f"Allez dans **Commandes** pour la consulter.")
-                            st.balloons()
-                            st.rerun()
-                        except Exception as ex:
-                            st.error(f"Erreur : {ex}")
-                else:
-                    st.button("Transformer en Commande",
-                               disabled=True, width="stretch",
-                               help="Validez d'abord le devis")
 
             # ── Annuler
             with col_c:
@@ -166,13 +130,12 @@ def render():
     # ── NOUVEAU DEVIS ──────────────────────────────────────────────────────────
     with tab_nouveau:
         clients  = ctrl.get_all_clients()
-        # Seulement les engins disponibles (quantité > 0)
-        engins_d = ctrl.get_engins_disponibles_commande()
+        engins_d = ctrl.get_all_engins()  # TOUS les engins sans exception
 
         if not clients:
             _err("Aucun client. Ajoutez un client d'abord."); return
         if not engins_d:
-            _err("Aucun engin disponible. Vérifiez le parc d'engins."); return
+            _err("Aucun engin dans le parc. Ajoutez des engins d'abord."); return
 
         _sec("Informations générales")
         nd1, nd2, nd3 = st.columns(3)
@@ -194,30 +157,31 @@ def render():
         st.info(f"Durée : **{duree} jour(s)**")
 
         _div()
-        _sec("Sélection des engins disponibles")
-        _info("Seuls les engins avec des unités disponibles sont affichés.")
+        _sec("Sélection des engins du parc")
+        _info("Tous les engins sont affichés — loués, disponibles ou en maintenance.")
 
-        # Afficher les engins disponibles avec leurs quantités
+        # Afficher TOUS les engins
         eng_selec = {}
         for eng in engins_d:
+            statut_eng = eng.statut or "disponible"
+            badge = {"disponible": "🟢", "loue": "🔴", "maintenance": "🟡"}.get(statut_eng, "⚪")
             col_e, col_q = st.columns([4, 1])
             with col_e:
                 selected = st.checkbox(
-                    f"**{eng['nom']}** ({eng['matricule']}) — "
-                    f"{eng['prix_journalier']:,.0f} MAD/jr — "
-                    f"**{eng['quantite_disponible']} dispo** / {eng['quantite_totale']} total",
-                    key=f"eng_chk_{eng['id']}")
+                    f"{badge} **{eng.nom}** ({eng.matricule or '—'}) — "
+                    f"{eng.prix_journalier:,.0f} MAD/jr — *{statut_eng}*",
+                    key=f"eng_chk_{eng.id}")
             with col_q:
                 if selected:
                     qte = st.number_input("Qté", min_value=1,
-                        max_value=eng["quantite_disponible"],
-                        value=1, key=f"eng_qty_{eng['id']}")
-                    eng_selec[eng["id"]] = {
+                        max_value=int(eng.quantite_totale or 99),
+                        value=1, key=f"eng_qty_{eng.id}")
+                    eng_selec[eng.id] = {
                         "quantite": qte,
-                        "prix_unitaire": eng["prix_journalier"],
-                        "montant": eng["prix_journalier"] * qte * duree
+                        "prix_unitaire": eng.prix_journalier,
+                        "montant": eng.prix_journalier * qte * duree
                     }
-                    st.caption(f"{eng['prix_journalier']:,.0f} × {qte} × {duree}j = {eng['prix_journalier']*qte*duree:,.0f} MAD")
+                    st.caption(f"{eng.prix_journalier:,.0f} × {qte} × {duree}j = {eng.prix_journalier*qte*duree:,.0f} MAD")
 
         if eng_selec:
             _div()

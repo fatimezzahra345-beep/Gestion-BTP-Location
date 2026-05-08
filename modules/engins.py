@@ -42,6 +42,12 @@ def render():
     render_page_header("🚛", "Parc d'Engins",
                        "Gestion du parc matériel — quantités et disponibilités")
 
+    # Synchronisation automatique : libère les engins dont la commande est terminée
+    try:
+        ctrl.sync_engins_depuis_commandes()
+    except Exception:
+        pass
+
     tab_liste, tab_ajouter, tab_modifier = st.tabs([
         "Liste des Engins", "Ajouter un Engin", "Modifier un Engin"
     ])
@@ -54,23 +60,21 @@ def render():
             return
 
         filtre = st.selectbox("Filtrer par statut",
-                              ["Tous", "disponible", "loue", "maintenance", "commande"],
+                              ["Tous", "disponible", "loue"],
                               key="eng_filtre")
         engins_filtres = [e for e in engins
                           if filtre == "Tous" or e.statut == filtre]
 
-        # Compteurs
+        # Compteurs — auto-calculés depuis les quantités réelles
         dispos = sum(
             max(0, (e.quantite_totale or 1) - (e.quantite_louee or 0) - (e.quantite_maintenance or 0)) for e in engins)
         loues = sum(e.quantite_louee or 0 for e in engins)
-        maints = sum(e.quantite_maintenance or 0 for e in engins)
         total_u = sum(e.quantite_totale or 1 for e in engins)
 
-        c1, c2, c3, c4 = st.columns(4)
+        c1, c2, c3 = st.columns(3)
         c1.metric("Total unités", total_u)
         c2.metric("Disponibles", dispos)
         c3.metric("Loués", loues)
-        c4.metric("Maintenance", maints)
 
         _div()
 
@@ -146,21 +150,10 @@ def render():
                 )
                 st.markdown(_card_top + photo_html + _card_info, unsafe_allow_html=True)
 
-                # Changer statut rapide
-                statuts = ["disponible", "loue", "maintenance", "commande"]
-                idx = statuts.index(engin.statut) if engin.statut in statuts else 0
-                col_st, col_del = st.columns([2, 1])
-                with col_st:
-                    new_s = st.selectbox("Statut", statuts, index=idx,
-                                         key=f"st_{engin.id}",
-                                         label_visibility="collapsed")
-                    if new_s != engin.statut:
-                        ctrl.update_engin(engin.id, statut=new_s);
-                        st.rerun()
-                with col_del:
-                    if st.button("Suppr.", key=f"del_{engin.id}", type="secondary"):
-                        ctrl.delete_engin(engin.id);
-                        st.rerun()
+                # Bouton supprimer seulement (statut géré automatiquement)
+                if st.button("Suppr.", key=f"del_{engin.id}", type="secondary"):
+                    ctrl.delete_engin(engin.id);
+                    st.rerun()
 
     # ── AJOUTER ───────────────────────────────────────────────────────────────
     with tab_ajouter:
@@ -176,8 +169,6 @@ def render():
                                           min_value=0.0, value=1500.0, step=50.0)
                 quantite = st.number_input("Quantité dans le parc",
                                            min_value=1, max_value=99, value=1, step=1)
-                statut_e = st.selectbox("Statut initial",
-                                        ["disponible", "loue", "maintenance", "commande"])
             desc_e = st.text_area("Description", placeholder="Caractéristiques, état…")
             if st.form_submit_button("Enregistrer l'engin", type="primary", width="stretch"):
                 if not nom_e.strip() or not matricule.strip():
@@ -186,7 +177,7 @@ def render():
                     try:
                         ctrl.create_engin(nom=nom_e, type_engin=type_e,
                                           matricule=matricule, prix_journalier=prix_jr,
-                                          statut=statut_e, description=desc_e,
+                                          statut="disponible", description=desc_e,
                                           quantite_totale=int(quantite))
                         st.success(f"Engin {nom_e} ajouté !");
                         st.rerun()
@@ -295,15 +286,13 @@ def render():
                                            min_value=0.0, value=float(engin_m.prix_journalier or 0), step=50.0)
                 new_qty = st.number_input("Quantité totale",
                                           min_value=1, max_value=99, value=int(engin_m.quantite_totale or 1))
-                new_loue = st.number_input("Quantité louée",
-                                           min_value=0, max_value=99, value=int(engin_m.quantite_louee or 0))
-                new_maint = st.number_input("Quantité en maintenance",
-                                            min_value=0, max_value=99, value=int(engin_m.quantite_maintenance or 0))
             new_desc = st.text_area("Description", value=engin_m.description or "")
 
-            # Calcul disponible en temps réel
+            # Infos calculées automatiquement (lecture seule)
+            new_loue = engin_m.quantite_louee or 0
+            new_maint = engin_m.quantite_maintenance or 0
             dispo_calc = max(0, int(new_qty) - int(new_loue) - int(new_maint))
-            st.info(f"Quantité disponible calculée : **{dispo_calc}** / {int(new_qty)} total")
+            st.info(f"Quantité disponible : **{dispo_calc}** / {int(new_qty)} total | Loués : **{new_loue}** (mis à jour automatiquement)")
 
             if st.form_submit_button("Enregistrer les modifications",
                                      type="primary", width="stretch"):

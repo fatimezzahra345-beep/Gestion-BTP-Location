@@ -20,7 +20,7 @@ def render():
         _info("Aucune location active. Le calendrier s'affichera dès que des commandes seront créées.")
 
     df_ev=pd.DataFrame([{
-        "N° Devis":e["devis"],"Client":e["client"],"Engin":e["engin"],
+        "N° Facture":e["devis"],"Client":e["client"],
         "Début":e["debut"].strftime("%d/%m/%Y"),"Fin":e["fin"].strftime("%d/%m/%Y"),
         "Durée (j)":(e["fin"]-e["debut"]).days+1,
         "Statut":e["statut"].upper(),

@@ -12,21 +12,6 @@ def render():
         "Créez un BL depuis une commande confirmée")
 
 
-    # ── Réinitialisation rapide ───────────────────────────────────────────────
-    with st.expander("🗑️ Vider les données de cette page"):
-        st.warning("⚠️ Supprime toutes les données de ce tableau. Les tables restent intactes.")
-        if st.button("Confirmer la suppression", type="secondary",
-                     key="del_bonslivraison_btn"):
-            try:
-                from database import engine as _e_bonslivraison
-                from sqlalchemy import text as _t_bonslivraison
-                with _e_bonslivraison.connect() as _c_bonslivraison:
-                    _c_bonslivraison.execute(_t_bonslivraison("DELETE FROM bons_livraison"))
-                    _c_bonslivraison.commit()
-                st.success("✅ Données supprimées. Les tables restent vides.")
-                st.rerun()
-            except Exception as _ex_bonslivraison:
-                st.error(str(_ex_bonslivraison))
     _div()
 
     tab_liste, tab_creer = st.tabs(["Liste des BL", "Créer un BL"])

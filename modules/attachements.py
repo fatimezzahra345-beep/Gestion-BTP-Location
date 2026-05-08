@@ -12,21 +12,6 @@ def render():
         "Un attachement par client — pointage de tous les engins ensemble")
 
 
-    # ── Réinitialisation rapide ───────────────────────────────────────────────
-    with st.expander("🗑️ Vider les données de cette page"):
-        st.warning("⚠️ Supprime toutes les données de ce tableau. Les tables restent intactes.")
-        if st.button("Confirmer la suppression", type="secondary",
-                     key="del_attachements_btn"):
-            try:
-                from database import engine as _e_attachements
-                from sqlalchemy import text as _t_attachements
-                with _e_attachements.connect() as _c_attachements:
-                    _c_attachements.execute(_t_attachements("DELETE FROM attachements"))
-                    _c_attachements.commit()
-                st.success("✅ Données supprimées. Les tables restent vides.")
-                st.rerun()
-            except Exception as _ex_attachements:
-                st.error(str(_ex_attachements))
     _div()
 
     tab_liste, tab_creer = st.tabs(["Liste des Attachements", "Créer un Attachement"])
@@ -39,8 +24,7 @@ def render():
             atts = []
         if not atts:
             _info("Aucun attachement. Créez-en un via l'onglet 'Créer un Attachement'.")
-        else:
-            df_a = pd.DataFrame([{
+        df_a = pd.DataFrame([{
                 "N°":         a.get("numero",""),
                 "Commande":   a.get("commande_numero","—"),
                 "Client":     a.get("client",""),
@@ -48,7 +32,8 @@ def render():
                 "Mois/Année": f"{a.get('mois',0):02d}/{a.get('annee',0)}",
                 "Jours":      float(a.get("nb_jours_travailles", 0) or 0),
             } for a in atts])
-            st.dataframe(df_a, width="stretch", hide_index=True, height=300)
+        st.dataframe(df_a, width="stretch", hide_index=True, height=300)
+        if atts:
             _div()
             att_map = {a["numero"]: a["id"] for a in atts}
             sel_att = st.selectbox("Télécharger PDF", ["—"]+list(att_map.keys()),
@@ -68,24 +53,20 @@ def render():
     # ── CRÉER ─────────────────────────────────────────────────────────────────
     with tab_creer:
         # Récupérer commandes disponibles
+        # Uniquement les commandes (confirmées, livrées ou en attente)
         try:
             all_cmds = ctrl.get_all_commandes()
-            cmds_att = [c for c in all_cmds if c.get("statut","") != "annulee"]
+            cmds_att = [c for c in all_cmds
+                        if c.get("statut","") == "livree"]
         except Exception:
             cmds_att = []
 
-        try:
-            all_devis = ctrl.get_all_devis()
-            devis_valides = [d for d in all_devis
-                             if d.get("statut") in ["valide","facture","brouillon"]]
-        except Exception:
-            devis_valides = []
-
-        if not cmds_att and not devis_valides:
-            _warn("Aucune commande ni devis disponible.")
-
-        # Sélection source
-        if cmds_att:
+        if not cmds_att:
+            _warn("Aucune commande livrée disponible. Marquez d'abord une commande comme livrée.")
+            source_devis_id = None
+            source_client   = ""
+            source_engins   = []
+        else:
             _sec("Sélectionner la commande")
             cmd_opts = {
                 f"{c['numero']} — {c['client']} "
@@ -94,30 +75,14 @@ def render():
                 for c in cmds_att
             }
             sel_cmd = st.selectbox("Commande *", list(cmd_opts.keys()), key="att_cmd")
-            cmd_sel = cmd_opts.get(sel_cmd) if cmd_opts else None
-            if not cmd_sel: cmd_sel = next(iter(cmd_opts.values())) if cmd_opts else {}
+            cmd_sel = cmd_opts.get(sel_cmd) or next(iter(cmd_opts.values()))
             source_devis_id = cmd_sel.get("devis_id")
             source_client   = cmd_sel.get("client","")
             source_engins   = cmd_sel.get("engins",[])
-        else:
-            _info("Aucune commande — sélectionnez un devis.")
-            dev_opts = {f"{d['numero']} — {d.get('client_nom','?')}": d
-                        for d in devis_valides}
-            sel_dev = st.selectbox("Devis *", list(dev_opts.keys()), key="att_dev")
-            dev_sel = dev_opts.get(sel_dev) or (next(iter(dev_opts.values())) if dev_opts else None)
-            if not dev_sel:
-                _warn("Sélectionnez un devis.")
-                source_devis_id = None
-                source_client   = ""
-                source_engins   = []
-            else:
-                source_devis_id = dev_sel.get("id")
-                source_client   = dev_sel.get("client_nom","")
-                source_engins   = [{"nom": l["engin_nom"], "quantite": l["quantite"]}
-                                   for l in dev_sel.get("lignes",[])]
 
-        # Info client
-        st.markdown(
+        if cmds_att:
+         # Info client
+         st.markdown(
             f'<div style="background:#EFF6FF;border:1px solid #BFDBFE;border-radius:10px;'
             f'padding:12px 16px;margin:8px 0;font-size:13px;font-weight:600;color:#1D4ED8">'
             f'Client : {source_client}</div>',
