@@ -753,35 +753,23 @@ def generer_attestation_retard_pdf(data: dict) -> bytes:
 
         y -= 0.2*cm
 
-        # Tableau récapitulatif
+        # Tableau récapitulatif — seulement le montant impayé
         rows = [
             [P("<b>Désignation</b>", bold=True, align=TA_CENTER, color=BLANC, size=9),
              P("<b>Montant (MAD)</b>", bold=True, align=TA_CENTER, color=BLANC, size=9)],
-            [P(f"Capital dû — Facture {fac_num}", size=9, color=BLEU),
+            [P(f"Montant impayé — Facture {fac_num}", size=9, color=BLEU),
              P(f"{capital:,.2f}", align=TA_RIGHT, size=9)],
         ]
         if interets > 0:
-            # Taux fixe — intérêts calculés
             rows.append([
                 P(f"Intérêts de retard ({taux_label or str(taux)+'%'})",
                   size=9, color=ROUGE),
                 P(f"+{interets:,.2f}", align=TA_RIGHT, size=9, color=ROUGE),
             ])
-            rows.append([
-                P("<b>TOTAL DÛ</b>", bold=True, size=10, color=BLEU),
-                P(f"<b>{total_att:,.2f}</b>", bold=True, align=TA_RIGHT, size=10, color=BLEU),
-            ])
-        else:
-            # Taux avec période — intérêts non calculés
-            rows.append([
-                P(f"Taux d'intérêt applicable : {taux_label or str(taux)+'%'}",
-                  size=9, color=ROUGE),
-                P("À calculer", align=TA_RIGHT, size=9, color=ROUGE),
-            ])
-            rows.append([
-                P("<b>Montant dû (hors intérêts)</b>", bold=True, size=10, color=BLEU),
-                P(f"<b>{capital:,.2f}</b>", bold=True, align=TA_RIGHT, size=10, color=BLEU),
-            ])
+        rows.append([
+            P("<b>TOTAL DÛ</b>", bold=True, size=10, color=BLEU),
+            P(f"<b>{total_att:,.2f}</b>", bold=True, align=TA_RIGHT, size=10, color=BLEU),
+        ])
 
         nr = len(rows)
         t = Table(rows, colWidths=[AW*0.65, AW*0.35])

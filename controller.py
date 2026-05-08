@@ -50,13 +50,15 @@ def get_engin_by_id(engin_id: int):
         session.close()
 
 
-def create_engin(nom, matricule, type_engin, prix_journalier, description="", photo_path=None, date_acquisition=None):
+def create_engin(nom, matricule, type_engin, prix_journalier, description="", photo_path=None, date_acquisition=None, statut="disponible", quantite_totale=1):
     session = SessionLocal()
     try:
         engin = Engin(
             nom=nom, matricule=matricule, type_engin=type_engin,
             prix_journalier=prix_journalier, description=description,
-            photo_path=photo_path, date_acquisition=date_acquisition
+            photo_path=photo_path, date_acquisition=date_acquisition,
+            statut=statut, quantite_totale=quantite_totale,
+            quantite_louee=0, quantite_maintenance=0,
         )
         session.add(engin)
         session.commit()
@@ -504,26 +506,28 @@ def get_dashboard_stats():
 
 
 def get_locations_calendrier():
-    """Retourne les locations pour l'affichage calendrier."""
+    """Retourne les locations pour l'affichage calendrier — uniquement les factures payées."""
     session = SessionLocal()
     try:
-        devis_list = session.query(Devis).filter(
-            Devis.statut.in_(["valide", "facture"])
-        ).all()
+        factures = session.query(Facture).filter(Facture.statut == "paye").all()
         events = []
-        for d in devis_list:
+        for f in factures:
+            if not f.devis:
+                continue
+            d = f.devis
             client_nom = d.client.nom_complet if d.client else "N/A"
-            for ligne in d.lignes:
-                engin_nom = ligne.engin.nom if ligne.engin else "N/A"
-                events.append({
-                    "devis": d.numero,
-                    "client": client_nom,
-                    "engin": engin_nom,
-                    "debut": d.date_debut,
-                    "fin": d.date_fin,
-                    "statut": d.statut,
-                    "montant": d.montant_ttc
-                })
+            engins_noms = ", ".join(
+                l.engin.nom for l in d.lignes if l.engin
+            ) or "N/A"
+            events.append({
+                "devis": f.numero,
+                "client": client_nom,
+                "engin": engins_noms,
+                "debut": d.date_debut,
+                "fin": d.date_fin,
+                "statut": f.statut,
+                "montant": f.montant_ttc
+            })
         return events
     finally:
         session.close()
@@ -1789,5 +1793,21 @@ def devis_vers_commande(devis_id: int) -> tuple:
     except Exception as e:
         session.rollback()
         raise e
+    finally:
+        session.close()
+
+def reset_quantites_engins():
+    """Remet quantite_louee = 0 et statut = 'disponible' sur tous les engins."""
+    session = SessionLocal()
+    try:
+        engins = session.query(Engin).all()
+        for e in engins:
+            e.quantite_louee = 0
+            e.quantite_maintenance = 0
+            e.statut = "disponible"
+        session.commit()
+    except Exception as ex:
+        session.rollback()
+        raise ex
     finally:
         session.close()
